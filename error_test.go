@@ -3,6 +3,8 @@ package errorx_test
 import (
 	"context"
 	"testing"
+
+	"github.com/yuninks/errorx"
 	"github.com/yuninks/langx"
 )
 
@@ -31,19 +33,19 @@ func TestError(t *testing.T) {
 		"username":      "Hello #name#", // 有占位符
 	})
 
-	err = langx.NewError(ctx, "error")
+	err = errorx.NewError(ctx, "error")
 	// fmt.Printf("err: %v\n", err)
 	t.Log(err.Error())
-	val, ok := err.(langx.LangError)
+	val, ok := err.(errorx.ErrorInterface)
 	if ok {
 		t.Log(val.GetCode())
 	}
 
-	err = langx.NewErrorf(ctx, "username", map[string]string{
+	err = errorx.NewErrorf(ctx, "username", map[string]string{
 		"name": "yuninks",
 	})
 	t.Log(err.Error())
-	val, ok = err.(langx.LangError)
+	val, ok = err.(errorx.ErrorInterface)
 	if ok {
 		t.Log(val.GetCode())
 

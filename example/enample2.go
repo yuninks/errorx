@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/yuninks/errorx"
 	"github.com/yuninks/langx"
 )
 
@@ -33,11 +34,11 @@ func (l Language) String() string {
 }
 
 func (l Language) Error() error {
-	return langx.NewError(context.Background(), l.String())
+	return errorx.NewError(context.Background(), l.String())
 }
 
 func (l Language) Errorf(format map[string]string) error {
-	return langx.NewErrorf(context.Background(), l.String(), format)
+	return errorx.NewErrorf(context.Background(), l.String(), format)
 }
 
 var (

@@ -9,7 +9,7 @@ import (
 // 定义错误常量
 
 type ErrorLanguage struct {
-	langx.LangError
+	ErrorInterface
 }
 
 // 生成错误常量
@@ -17,7 +17,7 @@ func NewLanguage(uniKey string, code int, defaultValue string) ErrorLanguage {
 	langx.AppendCode(map[string]int{uniKey: code})
 	langx.AppendTrans(langx.GetDefaultLang(), map[string]string{uniKey: defaultValue})
 
-	l := langx.NewStruct(context.Background(), uniKey, nil)
+	l := NewStruct(context.Background(), uniKey, nil)
 
 	return ErrorLanguage{l}
 }
