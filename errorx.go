@@ -6,92 +6,57 @@ import (
 	"github.com/yuninks/langx"
 )
 
+// 定义错误常量
+
+type ErrorLanguage struct {
+	langx.LangError
+}
+
+// 生成错误常量
+func NewLanguage(uniKey string, code int, defaultValue string) ErrorLanguage {
+	langx.AppendCode(map[string]int{uniKey: code})
+	langx.AppendTrans(langx.GetDefaultLang(), map[string]string{uniKey: defaultValue})
+
+	l := langx.NewStruct(context.Background(), uniKey, nil)
+
+	return ErrorLanguage{l}
+}
+
 // Key生成错误信息
-
-type LangError interface {
-	Copy() LangError                    // 复制一个新的错误信息
-	Error() string                      // 实现error接口&获取翻译后的错误信息
-	GetCode() int                       // 获取翻译后的Code
-	GetKey() string                     // 获取原Key值
-	GetFormat() map[string]string       // 获取附加数据
-	SetFormat(format map[string]string) // 设置附加数据
-	SetCtx(ctxHttp context.Context)     // 设置上下文
-	SetLang(lang string)                // 设置语言
-	SetFormatKV(key, value string)      // 设置附加数据键值对
+func (l ErrorLanguage) Err() error {
+	return l
 }
 
-type langError struct {
-	ctx    context.Context
-	key    string
-	format map[string]string
+// Key生成错误信息
+func (l ErrorLanguage) Errf(format map[string]string) error {
+	newLang := l.Copy()
+	newLang.SetFormat(format)
+	return newLang
 }
 
-func (l *langError) Copy() LangError {
-	return &langError{
-		ctx:    l.ctx,
-		key:    l.key,
-		format: l.format,
-	}
+func (l ErrorLanguage) ErrfKV(key, value string) error {
+	newLang := l.Copy()
+	newLang.SetFormatKV(key, value)
+	return newLang
 }
 
-func (e *langError) SetFormat(format map[string]string) {
-	e.format = format
+// 获取翻译后的错误信息
+func (l ErrorLanguage) Msg(ctx context.Context) string {
+	newLang := l.Copy()
+	newLang.SetCtx(ctx)
+	return newLang.Error()
 }
 
-func (l *langError) SetFormatKV(key, value string) {
-	if l.format == nil {
-		l.format = make(map[string]string)
-	}
-	l.format[key] = value
+// 获取翻译后的错误信息
+func (l ErrorLanguage) Msgf(ctx context.Context, format map[string]string) string {
+	newLang := l.Copy()
+	newLang.SetCtx(ctx)
+	newLang.SetFormat(format)
+	return newLang.Error()
 }
 
-func (e *langError) SetCtx(ctxHttp context.Context) {
-	e.ctx = ctxHttp
-}
-
-func (l *langError) Error() string {
-	errLang := langx.GetCtxLang(l.ctx)
-	return langx.GetFormat(errLang, l.key, l.format)
-}
-
-func (e *langError) GetCode() int {
-	return langx.GetCode(e.key)
-}
-
-func (e *langError) GetKey() string {
-	return e.key
-}
-
-func (e *langError) GetFormat() map[string]string {
-	if e.format == nil {
-		e.format = make(map[string]string)
-	}
-	return e.format
-}
-
-func (e *langError) SetLang(lang string) {
-	e.ctx = langx.SetCtxLang(e.ctx, lang)
-}
-
-func NewErrorf(ctx context.Context, key string, format map[string]string) error {
-	return &langError{
-		ctx:    ctx,
-		key:    key,
-		format: format,
-	}
-}
-
-func NewError(ctx context.Context, key string) error {
-	return &langError{
-		ctx: ctx,
-		key: key,
-	}
-}
-
-func NewStruct(ctx context.Context, key string, format map[string]string) LangError {
-	return &langError{
-		ctx:    ctx,
-		key:    key,
-		format: format,
-	}
-}
+var (
+	Success    ErrorLanguage = NewLanguage("success", 200, "操作成功")
+	Error      ErrorLanguage = NewLanguage("error", 400, "操作失败")
+	ErrWithMsg ErrorLanguage = NewLanguage("error_with_msg", 400, "操作失败: #msg#")
+)
