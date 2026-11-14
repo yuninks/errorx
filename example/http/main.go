@@ -13,7 +13,6 @@ import (
 	"net/http/httptest"
 
 	"github.com/yuninks/errorx"
-	"github.com/yuninks/langx"
 )
 
 var (
@@ -23,11 +22,14 @@ var (
 )
 
 func init() {
-	langx.AppendTrans("en", map[string]string{
+	// langx v0.1.1 起注册都是实例方法，这里写在 errorx 的共享实例上。
+	if err := errorx.Langx().AppendMsg("en", map[string]string{
 		"param_invalid":  "invalid parameter: #field#",
 		"user_not_found": "user not found",
 		"db_error":       "database is busy",
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // Response 是对外的统一响应体
@@ -62,7 +64,7 @@ func userHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // withLang 把请求头里的语言放进 ctx。
-// langx 约定从 ctx 里读 "Accept-Language"，也可以自己用 langx.SetCtxLang 指定。
+// langx 约定从 ctx 里读 "Accept-Language"，也可以自己用 errorx.Langx().SetCtxLang 指定。
 func withLang(r *http.Request) context.Context {
 	return context.WithValue(r.Context(), "Accept-Language", r.Header.Get("Accept-Language"))
 }

@@ -21,15 +21,22 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	langx.InitLangx(
-		langx.SetDefaultLanguage("zh"),
+	// langx v0.1.1 起取消包级全局状态，注册与取值都是 *langx.Instance 的方法。
+	// errorx 的共享实例在包初始化阶段已创建，这里只在它上面做测试配置。
+	inst := errorx.Langx()
+	if err := inst.Configure(
+		langx.SetDefaultLang("zh"),
 		langx.SetDefaultCode(-1), // 故意设成 -1，用来验证未注册的 key 不会退化成默认码
-	)
-	langx.AppendTrans("en", map[string]string{
+	); err != nil {
+		panic(err)
+	}
+	if err := inst.AppendMsg("en", map[string]string{
 		"test_user_not_found": "user not found",
 		"test_param_invalid":  "invalid parameter: #field#",
 		"test_db_error":       "database is busy",
-	})
+	}); err != nil {
+		panic(err)
+	}
 	os.Exit(m.Run())
 }
 
@@ -84,7 +91,7 @@ func TestPlaceholder(t *testing.T) {
 
 func TestMultiLanguage(t *testing.T) {
 	ctx := context.Background()
-	enCtx := langx.SetCtxLang(ctx, "en")
+	enCtx := errorx.Langx().SetCtxLang(ctx, "en")
 
 	if got, want := ErrUserNotFound.Msg(ctx), "用户不存在"; got != want {
 		t.Fatalf("中文 Msg = %q, want %q", got, want)
@@ -104,7 +111,7 @@ func TestMultiLanguage(t *testing.T) {
 		t.Fatalf("WithLang 后 Error = %q, want %q", got, want)
 	}
 	// 未注册的语言回退到默认语言，而不是吐裸 key
-	if got, want := ErrUserNotFound.Msg(langx.SetCtxLang(ctx, "ja")), "用户不存在"; got != want {
+	if got, want := ErrUserNotFound.Msg(errorx.Langx().SetCtxLang(ctx, "ja")), "用户不存在"; got != want {
 		t.Fatalf("未注册语言 = %q, want %q", got, want)
 	}
 }
@@ -194,11 +201,16 @@ func TestUnknownKeyIsNotSuccess(t *testing.T) {
 
 func TestRegistryOverwriteKeepsBuiltin(t *testing.T) {
 	// 用户习惯用 Register*，它会整体替换 langx 的注册表
-	langx.RegisterCode(map[string]int{"biz_code": 500})
-	langx.RegisterTrans("zh", map[string]string{"biz_code": "业务错误"})
+	inst := errorx.Langx()
+	if err := inst.RegisterCode(map[string]int{"biz_code": 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.RegisterMsg("zh", map[string]string{"biz_code": "业务错误"}); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
-		langx.AppendCode(map[string]int{"error": 400, "success": 200, "error_with_msg": 400})
-		langx.AppendTrans("zh", map[string]string{
+		_ = inst.AppendCode(map[string]int{"error": 400, "success": 200, "error_with_msg": 400})
+		_ = inst.AppendMsg("zh", map[string]string{
 			"error": "操作失败", "success": "操作成功", "error_with_msg": "操作失败: #msg#",
 		})
 	}()
@@ -327,8 +339,13 @@ func TestFormatVerb(t *testing.T) {
 }
 
 func TestFromRegistry(t *testing.T) {
-	langx.AppendCode(map[string]int{"test_registry_key": 777})
-	langx.AppendTrans("zh", map[string]string{"test_registry_key": "注册表错误: #msg#"})
+	inst := errorx.Langx()
+	if err := inst.AppendCode(map[string]int{"test_registry_key": 777}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.AppendMsg("zh", map[string]string{"test_registry_key": "注册表错误: #msg#"}); err != nil {
+		t.Fatal(err)
+	}
 
 	e := errorx.NewErrorWith(context.Background(), "test_registry_key", map[string]string{"msg": "磁盘满了"})
 	if got, want := e.GetCode(), 777; got != want {
@@ -338,16 +355,21 @@ func TestFromRegistry(t *testing.T) {
 		t.Fatalf("msg = %q, want %q", got, want)
 	}
 	// 构造时带上 ctx 语言
-	enCtx := langx.SetCtxLang(context.Background(), "en")
-	langx.AppendTrans("en", map[string]string{"test_registry_key": "registry error: #msg#"})
+	enCtx := inst.SetCtxLang(context.Background(), "en")
+	if err := inst.AppendMsg("en", map[string]string{"test_registry_key": "registry error: #msg#"}); err != nil {
+		t.Fatal(err)
+	}
 	if got, want := errorx.NewErrorWith(enCtx, "test_registry_key", map[string]string{"msg": "full"}).Error(), "registry error: full"; got != want {
 		t.Fatalf("en msg = %q, want %q", got, want)
 	}
 }
 
 func TestResolveBranches(t *testing.T) {
+	inst := errorx.Langx()
 	// 资源里只有文案、没有 code：保留文案，code 用 CodeUnknown 兜底
-	langx.AppendTrans("zh", map[string]string{"test_msg_only": "只有文案"})
+	if err := inst.AppendMsg("zh", map[string]string{"test_msg_only": "只有文案"}); err != nil {
+		t.Fatal(err)
+	}
 	e := errorx.NewError(context.Background(), "test_msg_only")
 	if got, want := e.GetCode(), errorx.CodeUnknown; got != want {
 		t.Fatalf("只有文案时 code = %d, want %d", got, want)
@@ -357,7 +379,9 @@ func TestResolveBranches(t *testing.T) {
 	}
 
 	// 资源里只有 code、没有文案：code 生效，文案退化为 key
-	langx.AppendCode(map[string]int{"test_code_only": 1234})
+	if err := inst.AppendCode(map[string]int{"test_code_only": 1234}); err != nil {
+		t.Fatal(err)
+	}
 	e2 := errorx.NewError(context.Background(), "test_code_only")
 	if got, want := e2.GetCode(), 1234; got != want {
 		t.Fatalf("只有 code 时 code = %d, want %d", got, want)
@@ -391,8 +415,13 @@ func TestNewPanicsOnEmptyKey(t *testing.T) {
 }
 
 func TestNewErrorWith(t *testing.T) {
-	langx.AppendCode(map[string]int{"test_dynamic": 901})
-	langx.AppendTrans("zh", map[string]string{"test_dynamic": "动态错误: #msg#"})
+	inst := errorx.Langx()
+	if err := inst.AppendCode(map[string]int{"test_dynamic": 901}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.AppendMsg("zh", map[string]string{"test_dynamic": "动态错误: #msg#"}); err != nil {
+		t.Fatal(err)
+	}
 
 	e := errorx.NewErrorWith(context.Background(), "test_dynamic", map[string]string{"msg": "磁盘满了"})
 	if got, want := e.GetCode(), 901; got != want {
@@ -402,9 +431,62 @@ func TestNewErrorWith(t *testing.T) {
 		t.Fatalf("msg = %q, want %q", got, want)
 	}
 	// 带 ctx 语言
-	enCtx := langx.SetCtxLang(context.Background(), "en")
-	langx.AppendTrans("en", map[string]string{"test_dynamic": "dynamic error: #msg#"})
+	enCtx := inst.SetCtxLang(context.Background(), "en")
+	if err := inst.AppendMsg("en", map[string]string{"test_dynamic": "dynamic error: #msg#"}); err != nil {
+		t.Fatal(err)
+	}
 	if got, want := errorx.NewErrorWith(enCtx, "test_dynamic", map[string]string{"msg": "full"}).Error(), "dynamic error: full"; got != want {
 		t.Fatalf("en msg = %q, want %q", got, want)
+	}
+}
+
+func TestLangxSharedInstance(t *testing.T) {
+	inst := errorx.Langx()
+	if inst == nil {
+		t.Fatal("Langx() 返回了 nil")
+	}
+	// 同一个实例：写进去的内容 errorx 立刻能读到
+	if err := inst.AppendMsg("zh", map[string]string{"test_shared": "共享实例"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := errorx.Langx().GetMsg("zh", "test_shared"), "共享实例"; got != want {
+		t.Fatalf("GetMsg = %q, want %q", got, want)
+	}
+}
+
+func TestSetLangx(t *testing.T) {
+	old := errorx.Langx()
+	defer errorx.SetLangx(old)
+
+	inst, err := langx.New(
+		langx.SetDefaultLang("en"),
+		langx.SetDefaultCode(-1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inst.AppendMsg("en", map[string]string{
+		"test_user_not_found": "user not found (swapped)",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	errorx.SetLangx(inst)
+
+	// 切换后默认语言变成 en，资源里的文案优先
+	if got, want := ErrUserNotFound.Error(), "user not found (swapped)"; got != want {
+		t.Fatalf("切换实例后 Error = %q, want %q", got, want)
+	}
+	// ctx 语言也走新实例
+	if got, want := ErrUserNotFound.Msg(inst.SetCtxLang(context.Background(), "en")), "user not found (swapped)"; got != want {
+		t.Fatalf("切换实例后 Msg = %q, want %q", got, want)
+	}
+	// 切换前定义的常量仍然可用：code 来自常量自身
+	if got, want := ErrParamInvalid.ErrKV("field", "age").GetCode(), 10002; got != want {
+		t.Fatalf("切换实例后 code = %d, want %d", got, want)
+	}
+	// 新实例里没有的文案会自动回填常量自带的默认文案
+	if got, want := errorx.ErrInternal.Msg(context.Background()), "服务器内部错误"; got != want {
+		t.Fatalf("切换实例后兜底文案 = %q, want %q", got, want)
 	}
 }

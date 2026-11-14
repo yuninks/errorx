@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/yuninks/errorx"
-	"github.com/yuninks/langx"
 )
 
 // 1) 定义错误常量：key + 业务码 + 默认文案。
@@ -23,11 +22,14 @@ var (
 func init() {
 	// 2) 补充其它语言的文案。
 	// errorx.New 已经把默认文案注册进默认语言（langx 默认是 zh），这里只补 en。
-	langx.AppendTrans("en", map[string]string{
+	// langx v0.1.1 起是实例方法：errorx 对外暴露共享实例 errorx.Langx()。
+	if err := errorx.Langx().AppendMsg("en", map[string]string{
 		"user_not_found": "user not found",
 		"param_invalid":  "invalid parameter: #field#",
 		"db_error":       "database is busy",
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 func main() {
@@ -71,12 +73,13 @@ func demoI18n() {
 	fmt.Println("=== 3. 多语言 ===")
 
 	ctx := context.Background()
-	enCtx := langx.SetCtxLang(ctx, "en") // 也可以由 HTTP 头 Accept-Language 决定
+	// ctx 里的语言要写在 errorx 共享的 langx 实例上，errorx 渲染时才读得到。
+	enCtx := errorx.Langx().SetCtxLang(ctx, "en") // 也可以由 HTTP 头 Accept-Language 决定
 
 	fmt.Println("zh            :", ErrUserNotFound.Msg(ctx))
 	fmt.Println("en            :", ErrUserNotFound.Msg(enCtx))
 	fmt.Println("固定 en       :", ErrUserNotFound.Err().WithLang("en"))
-	fmt.Println("未注册语言回退:", ErrUserNotFound.Msg(langx.SetCtxLang(ctx, "ja")))
+	fmt.Println("未注册语言回退:", ErrUserNotFound.Msg(errorx.Langx().SetCtxLang(ctx, "ja")))
 }
 
 func demoWrap() {

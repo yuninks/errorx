@@ -127,7 +127,7 @@ func (e *defaultError) Msg(ctx context.Context) string {
 	if e.lang != "" {
 		return e.render(e.lang)
 	}
-	return e.render(langx.GetCtxLang(ctx))
+	return e.render(Langx().GetCtxLang(ctx))
 }
 
 func (e *defaultError) MsgWith(ctx context.Context, format map[string]string) string {
@@ -144,23 +144,25 @@ func (e *defaultError) render(lang string) string {
 	if e.key == "" {
 		return emptyKeyMsg
 	}
+	inst := Langx()
 	if lang == "" {
-		lang = langx.GetDefaultLang()
+		lang = inst.GetDefaultLang()
 	}
-	if !langx.Has(lang, e.key) {
-		e.registerDefault()
+	if !inst.HasMsg(lang, e.key) {
+		e.registerDefault(inst)
 	}
-	return langx.GetFormat(lang, e.key, e.format)
+	return inst.GetMsgf(lang, e.key, e.format)
 }
 
-// registerDefault 把默认文案回填到 langx 的默认语言。
-// 用于用户调用 langx.RegisterTrans / RegisterCode 覆盖资源、
-// 或者默认语言在 main 里被改掉之后，仍然能拿到可读的文案。
-func (e *defaultError) registerDefault() {
+// registerDefault 把默认文案回填到 langx 实例的默认语言。
+// 用于用户调用 RegisterMsg / RegisterCode 覆盖资源、
+// 切换了 langx 实例、或者默认语言在 main 里被改掉之后，仍然能拿到可读的文案。
+func (e *defaultError) registerDefault(inst *langx.Instance) {
 	if e.defaultValue == "" || e.defaultValue == e.key {
 		return
 	}
-	langx.AppendTrans(langx.GetDefaultLang(), map[string]string{e.key: e.defaultValue})
+	// key 与语言名在构造期已经校验过，这里注册不会失败；忽略错误即可。
+	_ = inst.AppendMsg(inst.GetDefaultLang(), map[string]string{e.key: e.defaultValue})
 }
 
 // Is 让 errors.Is 按错误标识（key）匹配：errors.Is(err, errorx.Error)。

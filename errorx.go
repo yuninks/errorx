@@ -12,14 +12,63 @@
 //	}
 //
 //	msg := ErrUserNotFound.Msg(ctx) // 按 ctx 里的语言渲染
+//	ctx = errorx.Langx().SetCtxLang(ctx, "en") // 也可以显式指定语言
 package errorx
 
 import (
 	"context"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/yuninks/langx"
 )
+
+// ---------- 共享的 langx 实例 ----------
+
+// langx v0.1.1 起取消了包级全局状态，改为显式的 *langx.Instance。
+// errorx 作为库仍然需要一个默认实例来承载错误常量的注册与文案渲染，
+// 因此在这里维护一个进程内共享实例，并通过 Langx() 暴露给调用方。
+var (
+	langxOnce    sync.Once
+	langxBackend atomic.Pointer[langx.Instance]
+)
+
+// Langx 返回 errorx 内部使用的 langx 实例（懒初始化的进程内单例）。
+//
+// 多语言资源、默认语言、context 语言都写在这个实例上，应用可以直接把它当成
+// 自己的 langx 实例使用：
+//
+//	errorx.Langx().AppendMsg("en", map[string]string{"user_not_found": "user not found"})
+//	ctx := errorx.Langx().SetCtxLang(context.Background(), "en")
+//	errorx.Langx().RegisterEmbed(langFS)
+func Langx() *langx.Instance {
+	langxOnce.Do(func() {
+		inst, err := langx.New(
+			// 未知 key 用 500 兜底，避免缺失的文案被当成成功
+			langx.SetDefaultCode(CodeUnknown),
+		)
+		if err != nil {
+			panic("errorx: 初始化 langx 实例失败: " + err.Error())
+		}
+		langxBackend.Store(inst)
+	})
+	return langxBackend.Load()
+}
+
+// SetLangx 把 errorx 切换到调用方自己的 langx 实例，之后所有注册、解析与渲染
+// 都使用该实例。已经定义好的错误常量无需重建：code 与默认文案由常量自身携带，
+// 实例里查不到文案时会自动回填。
+//
+// inst 为 nil 会 panic —— 这属于编程错误，应该在启动时就暴露。
+func SetLangx(inst *langx.Instance) {
+	if inst == nil {
+		panic("errorx: SetLangx 的实例不能为 nil")
+	}
+	// 标记懒初始化已完成，避免之后 Langx() 又创建默认实例覆盖传入的实例。
+	langxOnce.Do(func() {})
+	langxBackend.Store(inst)
+}
 
 // ErrorLanguage 是一个"错误常量"：把错误标识（key）、业务错误码（code）
 // 和默认文案（defaultValue）绑定在一起。
@@ -39,18 +88,25 @@ type ErrorLanguage struct {
 	defaultValue string
 }
 
-// New 定义一个新的错误常量，并把 code 与默认文案注册进 langx 与 errorx 的常量注册表。
+// New 定义一个新的错误常量，并把 code 与默认文案注册进 errorx 共享的 langx 实例
+// 与 errorx 自己的常量注册表。
 //
 // key 为空会 panic —— 这是定义期的编程错误，应该在启动时就暴露。
-// 默认文案里的占位符使用 #name# 形式（可用 langx.SetReplaceKey 修改）。
+// 默认文案里的占位符使用 #name# 形式
+// （可用 errorx.Langx().Configure(langx.SetReplaceKey("#%s#")) 修改）。
 //
 // 建议只在包级变量或 init 中调用（它会持续写入注册表）；动态场景请用 NewError / NewErrorWith。
 func New(key string, code int, defaultValue string) ErrorLanguage {
-	if key == "" {
+	if strings.TrimSpace(key) == "" {
 		panic("errorx: New 的 key 不能为空")
 	}
-	langx.AppendCode(map[string]int{key: code})
-	langx.AppendTrans(langx.GetDefaultLang(), map[string]string{key: defaultValue})
+	inst := Langx()
+	if err := inst.AppendCode(map[string]int{key: code}); err != nil {
+		panic("errorx: 注册错误码失败: " + err.Error())
+	}
+	if err := inst.AppendMsg(inst.GetDefaultLang(), map[string]string{key: defaultValue}); err != nil {
+		panic("errorx: 注册默认文案失败: " + err.Error())
+	}
 	l := ErrorLanguage{key: key, code: code, defaultValue: defaultValue}
 	register(l)
 	return l
@@ -145,7 +201,7 @@ func NewErrorWith(ctx context.Context, key string, format map[string]string) Err
 }
 
 func newFromRegistry(ctx context.Context, key string, format map[string]string) ErrorInterface {
-	lang := langx.GetCtxLang(ctx)
+	lang := Langx().GetCtxLang(ctx)
 	code, defaultValue, ok := resolve(key)
 	if !ok {
 		return ErrUnregistered.ErrKV("key", key).WithLang(lang)
@@ -161,7 +217,7 @@ func newFromRegistry(ctx context.Context, key string, format map[string]string) 
 }
 
 // CodeUnknown 是"有文案但没有注册错误码"时使用的兜底码。
-// 取 500 而不是 langx 的默认码（默认 -1，也可能被改成 200），避免配置缺失被当成成功。
+// 取 500 而不是 langx 的默认码（默认 -1，也可能被 Configure 改成别的值），避免配置缺失被当成成功。
 const CodeUnknown = 500
 
 // resolve 按 key 取出业务码与默认文案：
@@ -177,25 +233,27 @@ func resolve(key string) (code int, defaultValue string, ok bool) {
 		return l.code, l.defaultValue, true
 	}
 
-	lang := langx.GetDefaultLang()
-	hasMsg := langx.Has(lang, key)
-	hasCode := langx.HasCode(key)
+	inst := Langx()
+	lang := inst.GetDefaultLang()
+	hasMsg := inst.HasMsg(lang, key)
+	hasCode := inst.HasCode(key)
 
 	switch {
 	case hasMsg && hasCode:
-		return langx.GetCode(key), langx.GetMsg(lang, key), true
+		code, msg := inst.GetCodeMsg(lang, key)
+		return code, msg, true
 	case hasMsg:
 		// 资源里只有文案没有 code：保留文案，但用 CodeUnknown 兜底
-		return CodeUnknown, langx.GetMsg(lang, key), true
+		return CodeUnknown, inst.GetMsg(lang, key), true
 	case hasCode:
 		// 资源里只有 code 没有文案：文案退化为 key 本身
-		return langx.GetCode(key), key, true
+		return inst.GetCode(key), key, true
 	default:
 		return 0, "", false
 	}
 }
 
-// errorx 自己的错误常量注册表：即使 langx 的资源被 RegisterCode / RegisterTrans 覆盖，
+// errorx 自己的错误常量注册表：即使 langx 的资源被 RegisterCode / RegisterMsg 覆盖，
 // 用 errorx.New 定义过的常量依然能拿到正确的 code 与默认文案。
 var (
 	registryMu sync.RWMutex

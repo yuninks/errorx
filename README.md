@@ -19,7 +19,7 @@ fmt.Println(errors.Is(err, ErrUserNotFound), errors.Is(err, sql.ErrNoRows)) // t
 | 并发安全 | 错误值不可变，包级常量可被任意 goroutine 并发使用 |
 | 不丢上下文 | `Wrap` 保留底层错误，`errors.Is / As / Unwrap` 全部可用 |
 | 可排查 | 创建错误时抓调用栈，日志用 `%+v` 直接打印原因与栈 |
-| 不伪装成功 | 未注册的 key 返回 500 + 原始 key，绝不返回 langx 的默认码 200 |
+| 不伪装成功 | 未注册的 key 返回 500 + 原始 key，绝不把缺失的文案伪装成成功 |
 
 ## 安装
 
@@ -38,7 +38,6 @@ import (
 	"fmt"
 
 	"github.com/yuninks/errorx"
-	"github.com/yuninks/langx"
 )
 
 // 1) 定义错误常量：key + 业务码 + 默认文案（占位符写成 #name#）
@@ -48,11 +47,15 @@ var (
 )
 
 func init() {
-	// 2) 补充其它语言的文案；默认语言（zh）的文案 errorx.New 已经注册好了
-	langx.AppendTrans("en", map[string]string{
+	// 2) 补充其它语言的文案；默认语言（zh）的文案 errorx.New 已经注册好了。
+	// langx v0.1.1 起注册/取值都是 *langx.Instance 的方法，
+	// errorx 通过 Langx() 暴露内部共享实例。
+	if err := errorx.Langx().AppendMsg("en", map[string]string{
 		"user_not_found": "user not found",
 		"param_invalid":  "invalid parameter: #field#",
-	})
+	}); err != nil {
+		panic(err)
+	}
 }
 
 // 业务层：只管 return error
@@ -67,7 +70,8 @@ func loadUser(ctx context.Context, id string) error {
 }
 
 func main() {
-	ctx := langx.SetCtxLang(context.Background(), "en")
+	// ctx 语言要写在 errorx 共享的 langx 实例上，errorx 渲染时才读得到
+	ctx := errorx.Langx().SetCtxLang(context.Background(), "en")
 	err := loadUser(ctx, "")
 
 	var ei errorx.ErrorInterface
@@ -91,6 +95,26 @@ go run ./example/imports  # langx 资源加载的三种方式与 errorx 的配�
 - **ErrorLanguage**：错误常量，`errorx.New` 的返回值。不可变的值类型，可直接作为包级变量。
   它本身实现了 `error`，所以 `var err error = ErrUserNotFound` 成立，`errors.Is(err, ErrUserNotFound)` 按 key 比较。
 - **ErrorInterface**：错误值接口，`Err() / ErrWith() / Wrap()` 返回它；它本身就是 `error`，取 code 不需要类型断言。
+
+### 与 langx 实例的关系
+
+langx v0.1.1 起取消了包级全局状态，注册、取值、ctx 语言都是 `*langx.Instance` 的方法。
+errorx 维护了一个进程内共享实例，并把它暴露给调用方：
+
+| API | 说明 |
+| --- | --- |
+| `errorx.Langx() *langx.Instance` | errorx 使用的共享实例（懒初始化），资源加载、`SetCtxLang` 都写在这个实例上 |
+| `errorx.SetLangx(inst)` | 切换到调用方自己的 langx 实例；已定义的错误常量无需重建 |
+
+约定：
+
+- **ctx 语言要写在同一个实例上**：`errorx.Langx().SetCtxLang(ctx, "en")`。
+  langx 的显式 ctx 语言以实例指针作为 context 命名空间，写到别的实例上 errorx 读不到；
+  ctx 里直接放 `Accept-Language`（langx 约定的全局键）不受影响，见 `example/http`。
+- **多实例场景**：应用已经有一个 `*langx.Instance` 时，在 `main` 里 `errorx.SetLangx(inst)` 即可共用资源，
+  不必把错误文案再注册一遍。
+- **未知 key 的兜底码**：共享实例创建时把 langx 的默认码设成 `errorx.CodeUnknown`（500），
+  `NewError` 再额外用 `HasMsg / HasCode` 判断 key 是否真的注册过。
 
 ### 错误值是不可变的
 
@@ -121,6 +145,13 @@ fmt.Println(a, b, base)
 | --- | --- |
 | `errorx.New(key, code, defaultValue)` | 定义错误常量，key 为空会 panic |
 
+**配置 langx 实例**
+
+| 函数 | 说明 |
+| --- | --- |
+| `errorx.Langx()` | errorx 使用的共享 `*langx.Instance`（懒初始化） |
+| `errorx.SetLangx(inst)` | 切换到调用方自己的 langx 实例；传 nil 会 panic |
+
 **构造错误值**
 
 | 方法 | 说明 |
@@ -147,23 +178,23 @@ fmt.Println(a, b, base)
 
 ## 多语言
 
-- **语言来源**：`langx.SetCtxLang(ctx, "en")`，或 ctx 里的 `Accept-Language`（langx 约定），见 `example/http`。
-- **资源加载**：`AppendCode / AppendTrans`（追加）、`RegisterEmbed`（打包）、`RegisterDir`（目录），见 `example/imports`。
+- **语言来源**：`errorx.Langx().SetCtxLang(ctx, "en")`，或 ctx 里的 `Accept-Language`（langx 约定），见 `example/http`。
+- **资源加载**：`errorx.Langx().AppendCode / AppendMsg`（追加）、`RegisterEmbed`（打包）、`RegisterDir`（目录），见 `example/imports`。
 
-> **注意两种注册语义（langx v0.1.0 起）：**
-> - `RegisterCode` / `RegisterTrans`：**整体替换**对应的注册表，会把 `errorx.New` 在 init 阶段追加的内置文案冲掉；
+> **注意两种注册语义（langx v0.1.1 起，方法都在 `errorx.Langx()` 上）：**
+> - `RegisterCode` / `RegisterMsg`：**整体替换**对应的注册表，会把 `errorx.New` 在 init 阶段追加的内置文案冲掉；
 > - `RegisterEmbed` / `RegisterDir` / `RegisterFS`：**按键合并**，不影响已注册的资源。
 >
 > 即使被整体替换，错误常量自带 code 与默认文案，查不到时会自动回填，不会退化成裸 key；
-> 但直接用 `langx.GetTransFormat` 读这些 key 仍会看到裸 key —— 业务代码建议统一用 `Append*`。
+> 但直接用 `errorx.Langx().GetCodeMsgf` 读这些 key 仍可能看到裸 key —— 业务代码建议统一用 `Append*`。
 
 ## 用资源文件定义错误
 
 code 与文案都放在 json 资源里时，用 `NewError / NewErrorWith` 动态构造：
 
 ```go
-langx.AppendCode(map[string]int{"biz_fail": 1001})
-langx.AppendTrans("zh", map[string]string{"biz_fail": "业务失败: #msg#"})
+errorx.Langx().AppendCode(map[string]int{"biz_fail": 1001})
+errorx.Langx().AppendMsg("zh", map[string]string{"biz_fail": "业务失败: #msg#"})
 
 err := errorx.NewErrorWith(ctx, "biz_fail", map[string]string{"msg": "磁盘满了"})
 fmt.Println(err.GetCode(), err) // 1001 业务失败: 磁盘满了
@@ -176,7 +207,7 @@ err := errorx.NewError(ctx, "typo_key")
 fmt.Println(err.GetCode(), err) // 500 未注册的错误: typo_key
 ```
 
-（langx 的 `GetCode` 对未知 key 返回默认码；errorx 用 `langx.HasCode` / `langx.Has` 精确判断，
+（langx 的 `GetCode` 对未知 key 返回默认码；errorx 用 `errorx.Langx().HasCode` / `HasMsg` 精确判断，
 key 没注册就返回 500，资源里只有文案没有 code 时同样用 500 兜底，不会出现"打错 key 反而成功"。）
 
 ## 在 HTTP 服务里使用
@@ -222,7 +253,7 @@ go func() { _ = ErrParamInvalid.ErrKV("field", "age").Msg(ctx) }()
 | `val.SetLang("en")` | `val = val.WithLang("en")` |
 | `val.SetFormat(m)` | `val = val.WithFormat(m)` |
 | `val.SetFormatKV(k, v)` | `val = val.WithFormatKV(k, v)` |
-| `val.SetCtx(ctx)` | `val = val.WithLang(langx.GetCtxLang(ctx))` |
+| `val.SetCtx(ctx)` | `val = val.WithLang(errorx.Langx().GetCtxLang(ctx))` |
 | `ErrorWithMsg.Errf(m)` | `ErrWith(m)` |
 | `ErrorWithMsg.ErrfKV(k, v)` | `ErrKV(k, v)` |
 | `ErrorWithMsg.Msgf(ctx, m)` | `MsgWith(ctx, m)` |
@@ -238,6 +269,24 @@ go func() { _ = ErrParamInvalid.ErrKV("field", "age").Msg(ctx) }()
 4. `ErrorLanguage` 不再实现 `ErrorInterface`：常量的职责只有「定义 + 构造」，读取与派生都用 `Err()` 得到的值。
 5. 兼容别名 `Errf / ErrfKV / Msgf / NewLanguage / NewStruct` 与空操作 `Copy()` 已删除，不再保留。
 6. 未注册的 key 从「默认码 + 裸 key」变成「500 + 未注册提示」。
+
+### 从 langx v0.1.0（全局单例）升级
+
+langx v0.1.1 移除了包级函数，改为 `*langx.Instance` 的方法（v0.1.0 的 `AppendTrans` 对应 v0.1.1 的 `AppendMsg`）。
+errorx 已同步适配：所有对 langx 的读写都通过 `errorx.Langx()` 返回的共享实例进行。
+
+| 旧写法（langx v0.1.0） | 新写法（langx v0.1.1 + errorx） |
+| --- | --- |
+| `langx.AppendCode(m)` | `errorx.Langx().AppendCode(m)` |
+| `langx.AppendTrans(lang, m)` | `errorx.Langx().AppendMsg(lang, m)` |
+| `langx.RegisterCode / RegisterTrans` | `errorx.Langx().RegisterCode / RegisterMsg` |
+| `langx.RegisterEmbed / RegisterDir / RegisterFS` | `errorx.Langx().RegisterEmbed / RegisterDir / RegisterFS` |
+| `langx.SetCtxLang(ctx, lang)` | `errorx.Langx().SetCtxLang(ctx, lang)` |
+| `langx.GetCtxLang(ctx)` | `errorx.Langx().GetCtxLang(ctx)` |
+| `langx.GetTransFormat(lang, key, m)` | `errorx.Langx().GetCodeMsgf(lang, key, m)` |
+
+如果不想让 errorx 使用自己的共享实例，用 `errorx.SetLangx(appInst)` 把它换成应用已有的实例即可
+（显式 ctx 语言必须用同一个实例的 `SetCtxLang` 写入）。
 
 ## 目录结构
 

@@ -10,7 +10,6 @@ import (
 	"os"
 
 	"github.com/yuninks/errorx"
-	"github.com/yuninks/langx"
 )
 
 //go:embed lang
@@ -32,8 +31,15 @@ func main() {
 // 1) Append：零散追加，不会覆盖已有资源，推荐业务代码使用
 func regByAppend() {
 	fmt.Println("=== 1) Append：追加注册 ===")
-	langx.AppendCode(map[string]int{"append_key": 1001})
-	langx.AppendTrans("zh", map[string]string{"append_key": "追加的错误"})
+	inst := errorx.Langx()
+	if err := inst.AppendCode(map[string]int{"append_key": 1001}); err != nil {
+		fmt.Println("AppendCode:", err)
+		return
+	}
+	if err := inst.AppendMsg("zh", map[string]string{"append_key": "追加的错误"}); err != nil {
+		fmt.Println("AppendMsg:", err)
+		return
+	}
 
 	fmt.Println("zh:", trans("zh", "append_key", nil))
 	fmt.Println("en:", trans("en", "append_key", nil), "(en 没有，回退到默认语言)")
@@ -43,7 +49,7 @@ func regByAppend() {
 func regByEmbed() {
 	fmt.Println()
 	fmt.Println("=== 2) Embed：打包资源 ===")
-	if err := langx.RegisterEmbed(assetsFs); err != nil {
+	if err := errorx.Langx().RegisterEmbed(assetsFs); err != nil {
 		fmt.Println("RegisterEmbed:", err)
 		return
 	}
@@ -57,7 +63,7 @@ func regByDir() {
 	fmt.Println()
 	fmt.Println("=== 3) Dir：读取目录 ===")
 	dir := langDir()
-	if err := langx.RegisterDir(dir); err != nil {
+	if err := errorx.Langx().RegisterDir(dir); err != nil {
 		fmt.Println("RegisterDir:", err)
 		return
 	}
@@ -65,18 +71,19 @@ func regByDir() {
 }
 
 // 4) 与 errorx 组合。
-// langx 有两种注册语义（v0.1.0 起）：
-//   - RegisterCode / RegisterTrans：整体替换对应注册表
+// langx v0.1.1 有两种注册语义：
+//   - RegisterCode / RegisterMsg：整体替换对应注册表（RegisterMsg 是旧 RegisterTrans）
 //   - RegisterEmbed / RegisterDir / RegisterFS：按键合并，不动已有资源
 //
 // 上面用的是后者，所以 errorx 在 init 阶段追加的内置资源还在。
-// 即使用户改用 RegisterCode/RegisterTrans 覆盖掉，错误常量自带 code 与默认文案，
+// 即使用户改用 RegisterCode/RegisterMsg 覆盖掉，错误常量自带 code 与默认文案，
 // 也不会退化成裸 key —— code 永远来自常量自身。
 func withErrorx() {
 	fmt.Println()
 	fmt.Println("=== 4) 与 errorx 组合 ===")
 	ctx := context.Background()
-	enCtx := langx.SetCtxLang(ctx, "en")
+	// ctx 语言写在 errorx 共享实例上，errorx 渲染时才会读取到。
+	enCtx := errorx.Langx().SetCtxLang(ctx, "en")
 
 	// code 来自错误常量自身，msg 优先用 langx 资源里的文案
 	fmt.Println("code          :", ErrError.Err().GetCode())
@@ -89,7 +96,7 @@ func withErrorx() {
 }
 
 func trans(lang, key string, format map[string]string) string {
-	code, msg := langx.GetTransFormat(lang, key, format)
+	code, msg := errorx.Langx().GetCodeMsgf(lang, key, format)
 	return fmt.Sprintf("[%d] %s", code, msg)
 }
 
